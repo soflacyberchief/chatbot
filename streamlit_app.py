@@ -37,58 +37,75 @@ else:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Function to retrieve data from Jira
+    # Function to retrieve and parse data from Jira
     def search_jira(query):
-        # Use Basic Authentication with email and API token
-        auth = (jira_email, jira_api_token)
+        auth = (jira_email, jira_api_token)  # Use Basic Authentication with email and API token
         params = {"jql": query}  # JQL query to filter issues
         response = requests.get(f"{jira_url}/rest/api/2/search", auth=auth, params=params)
         
         if response.status_code == 200:
-            # Display response for debugging
-            st.write(response.json())  # Output the raw JSON response for troubleshooting
-            return "\n".join(
-                [issue["fields"]["summary"] + ": " + issue["fields"]["description"][:200]
-                 for issue in response.json().get("issues", [])]
-            )
+            return parse_jira_response(response.json())
         else:
-            # Show error if request was not successful
             st.error(f"Failed to fetch data from Jira: {response.status_code}")
             st.write(response.text)  # Output error response text for further inspection
+            return []
 
-        return "No relevant information found in Jira."
+    # Function to parse Jira response for human-readable format
+    def parse_jira_response(response_json):
+        issues = response_json.get("issues", [])
+        parsed_issues = []
 
-    # Display past messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        for issue in issues:
+            fields = issue.get("fields", {})
+            parsed_issue = {
+                "ID": issue.get("id"),
+                "Key": issue.get("key"),
+                "Summary": fields.get("summary", "N/A"),
+                "Description": fields.get("description", "N/A"),
+                "Assignee": fields.get("assignee", {}).get("displayName", "Unassigned") if fields.get("assignee") else "Unassigned",
+                "Status": fields.get("status", {}).get("name", "Unknown"),
+                "Project Name": fields.get("project", {}).get("name", "Unknown")
+            }
+            parsed_issues.append(parsed_issue)
 
-    # Chat input field
-    if prompt := st.chat_input("Ask a question related to your Jira data"):
+        return parsed_issues
 
-        # Store and display the current prompt
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    # Function to generate a human-like response from GPT-4 based on parsed Jira data
+    def generate_response_from_model(user_query, parsed_issues):
+        # Create a natural language summary of the issues
+        issues_text = "\n\n".join(
+            f"Issue {issue['Key']}: {issue['Summary']} - Status: {issue['Status']} - "
+            f"Assigned to: {issue['Assignee']}" for issue in parsed_issues
+        )
 
-        # Collect data from Jira
-        jira_data = search_jira("status != 'Done'")  # Modify JQL as needed for active projects
+        # Construct the prompt for GPT-4
+        prompt = (
+            f"You are an assistant that helps analyze Jira data for security projects. Based on the following data, "
+            f"answer the question in a helpful and conversational tone.\n\n"
+            f"Jira Data:\n{issues_text}\n\n"
+            f"User question: {user_query}"
+        )
 
-        # Compile Jira data for OpenAI
-        compiled_data = f"Jira Data:\n{jira_data}"
-
-        # Generate response using OpenAI with the latest API format
+        # Call the OpenAI API to get the response
         response = openai.ChatCompletion.create(
             model="gpt-4-turbo",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant providing security insights."},
-                {"role": "user", "content": f"{compiled_data}\n\nUser question: {prompt}"}
+                {"role": "system", "content": "You are a helpful assistant for answering Jira-related questions."},
+                {"role": "user", "content": prompt}
             ]
         ).choices[0].message['content']
 
-        # Display the assistant's response
-        with st.chat_message("assistant"):
-            st.markdown(response)
+        return response
 
-        # Store the assistant's response
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    # Streamlit interface for the chatbot
+    user_query = st.text_input("Ask a question about your Jira projects:")
+
+    if user_query:
+        # Retrieve and parse Jira data
+        parsed_issues = search_jira("status != 'Done'")  # Fetch open issues
+        if parsed_issues:
+            # Generate response from the language model
+            response = generate_response_from_model(user_query, parsed_issues)
+            st.write(response)
+        else:
+            st.write("No relevant data found in Jira.")
