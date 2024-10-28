@@ -1,56 +1,94 @@
 import streamlit as st
-from openai import OpenAI
+import requests
+import openai
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# Function to load API keys and URLs from config.txt
+def load_config(file_path="config.txt"):
+    config = {}
+    with open(file_path, "r") as f:
+        for line in f:
+            # Ignore empty lines or lines without an "=" character
+            if "=" in line:
+                key, value = line.strip().split("=", 1)  # Split only on the first "="
+                config[key] = value
+    return config
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
+# Load API keys and URLs
+config = load_config()
+openai_api_key = config.get("OPENAI_API_KEY")
+jira_email = config.get("JIRA_EMAIL")
+jira_api_token = config.get("JIRA_API_TOKEN")
+jira_url = config.get("JIRA_URL")
+
+# Check that all credentials are provided.
+if not openai_api_key or not jira_email or not jira_api_token or not jira_url:
+    st.error("Please ensure all API keys and URLs are provided in config.txt.")
 else:
+    # Set OpenAI API key
+    openai.api_key = openai_api_key
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+    # Show title and description.
+    st.title("💬 Travel and Leisure SecOps Chatbot")
+    st.write(
+        "This chatbot uses OpenAI's GPT-4.0 model alongside data from Jira to provide insights on ongoing projects."
+    )
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
+    # Initialize session state for messages
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Display the existing chat messages via `st.chat_message`.
+    # Function to retrieve data from Jira
+    def search_jira(query):
+        # Use Basic Authentication with email and API token
+        auth = (jira_email, jira_api_token)
+        params = {"jql": query}  # JQL query to filter issues
+        response = requests.get(f"{jira_url}/rest/api/2/search", auth=auth, params=params)
+        
+        if response.status_code == 200:
+            # Display response for debugging
+            st.write(response.json())  # Output the raw JSON response for troubleshooting
+            return "\n".join(
+                [issue["fields"]["summary"] + ": " + issue["fields"]["description"][:200]
+                 for issue in response.json().get("issues", [])]
+            )
+        else:
+            # Show error if request was not successful
+            st.error(f"Failed to fetch data from Jira: {response.status_code}")
+            st.write(response.text)  # Output error response text for further inspection
+
+        return "No relevant information found in Jira."
+
+    # Display past messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+    # Chat input field
+    if prompt := st.chat_input("Ask a question related to your Jira data"):
 
-        # Store and display the current prompt.
+        # Store and display the current prompt
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+        # Collect data from Jira
+        jira_data = search_jira("status != 'Done'")  # Modify JQL as needed for active projects
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
+        # Compile Jira data for OpenAI
+        compiled_data = f"Jira Data:\n{jira_data}"
+
+        # Generate response using OpenAI with the latest API format
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant providing security insights."},
+                {"role": "user", "content": f"{compiled_data}\n\nUser question: {prompt}"}
+            ]
+        ).choices[0].message['content']
+
+        # Display the assistant's response
         with st.chat_message("assistant"):
-            response = st.write_stream(stream)
+            st.markdown(response)
+
+        # Store the assistant's response
         st.session_state.messages.append({"role": "assistant", "content": response})
