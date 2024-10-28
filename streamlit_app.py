@@ -28,7 +28,7 @@ else:
     openai.api_key = openai_api_key
 
     # Show title and description.
-    st.title("💬 Travel and Leisure SecOps Chatbot")
+    st.title("💬 Developer Assistant Chatbot")
     st.write(
         "This chatbot uses OpenAI's GPT-4.0 model alongside data from Jira to provide insights on ongoing projects."
     )
