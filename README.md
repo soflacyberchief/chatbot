@@ -1,5 +1,5 @@
 
-# Developer Assistant Chatbot
+# Jira / Gitlab Developer Assistant Chatbot
 
 A powerful chatbot designed to streamline daily tasks and support developers by integrating with GitLab and Jira. This chatbot is built using Streamlit, OpenAI’s GPT-4, and REST API calls to Jira and GitLab to provide insights, automate tasks, and simplify project management for development teams.
 
